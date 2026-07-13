@@ -1,0 +1,6 @@
+BẢN VÁ CMCS v2.1.1
+1. Upload cloud.js và sw.js vào thư mục gốc repository GitHub.
+2. Chọn thay thế file cũ và Commit trực tiếp vào main.
+3. Không thay supabase-config.js.
+4. Chờ GitHub Pages triển khai, rồi tải lại ứng dụng.
+5. Bản vá gọi Edge Function: clever-endpoint.

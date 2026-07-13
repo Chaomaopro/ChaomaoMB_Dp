@@ -123,7 +123,7 @@
     try {
       const { data, error } = await client
         .from('profiles')
-        .select('id,email,full_name,role,status,plan,plan_expires_at,created_at,last_seen_at')
+        .select('id,email,full_name,phone,role,status,plan,plan_expires_at,created_at,last_seen_at,created_by')
         .eq('id', userId)
         .single();
       if (error) throw error;
@@ -383,30 +383,99 @@
     return currentProfile;
   }
 
-  async function listUsers() {
-    if (currentProfile?.role !== 'admin') throw new Error('Không có quyền quản trị.');
-    const { data, error } = await client
-      .from('profiles')
-      .select('id,email,full_name,role,status,plan,plan_expires_at,created_at,last_seen_at')
-      .order('created_at', { ascending: false });
+  function requireAdmin() {
+    if (currentProfile?.role !== 'admin' || currentProfile?.status !== 'active') {
+      throw new Error('Không có quyền quản trị.');
+    }
+  }
+
+  async function listUsers(filters = {}) {
+    requireAdmin();
+    const { data, error } = await client.rpc('admin_list_users', {
+      p_search: filters.search?.trim() || null,
+      p_status: filters.status || null,
+      p_plan: filters.plan || null,
+      p_limit: filters.limit || 200
+    });
     if (error) throw error;
     return data || [];
   }
 
-  async function updateUser(userId, patch) {
-    if (currentProfile?.role !== 'admin') throw new Error('Không có quyền quản trị.');
-    const allowed = {};
-    if (['active', 'locked', 'inactive'].includes(patch.status)) allowed.status = patch.status;
-    if (['free', 'pro', 'owner'].includes(patch.plan)) allowed.plan = patch.plan;
-    allowed.plan_expires_at = patch.plan_expires_at || null;
-
-    const { data, error } = await client
-      .from('profiles')
-      .update(allowed)
-      .eq('id', userId)
-      .select('id,email,full_name,role,status,plan,plan_expires_at,created_at,last_seen_at')
-      .single();
+  async function getAdminDashboard() {
+    requireAdmin();
+    const { data, error } = await client.rpc('admin_dashboard_stats');
     if (error) throw error;
+    return data || {};
+  }
+
+  async function updateUser(userId, patch) {
+    requireAdmin();
+    const { data, error } = await client.rpc('admin_update_user', {
+      p_user_id: userId,
+      p_status: patch.status,
+      p_plan: patch.plan,
+      p_plan_expires_at: patch.plan_expires_at || null,
+      p_role: patch.role || null,
+      p_reason: patch.reason?.trim() || null
+    });
+    if (error) throw error;
+    return Array.isArray(data) ? data[0] : data;
+  }
+
+  async function listAuditLogs(limit = 100) {
+    requireAdmin();
+    const { data, error } = await client.rpc('admin_list_audit_logs', { p_limit: limit });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function createAdminUser(payload) {
+    requireAdmin();
+    const { data, error } = await client.functions.invoke('clever-endpoint', {
+      body: {
+        email: payload.email?.trim(),
+        password: payload.password,
+        fullName: payload.fullName?.trim(),
+        phone: payload.phone?.trim() || null,
+        plan: payload.plan || 'free',
+        role: payload.role || 'user',
+        planExpiresAt: payload.planExpiresAt || null
+      }
+    });
+    if (error) {
+      let message = error.message || 'Không gọi được Edge Function clever-endpoint.';
+      try {
+        if (error.context && typeof error.context.json === 'function') {
+          const body = await error.context.json();
+          if (body?.error) message = body.error;
+        }
+      } catch (_) { /* giữ thông báo gốc */ }
+      throw new Error(message);
+    }
+    if (data?.error) throw new Error(data.error);
+    return data?.user || data;
+  }
+
+  async function sendPasswordReset(email) {
+    requireAdmin();
+    const redirectTo = `${location.origin}${location.pathname}`;
+    const { error } = await client.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+    if (error) throw error;
+  }
+
+  async function getLatestRelease() {
+    if (!currentUser) return null;
+    const { data, error } = await client
+      .from('app_releases')
+      .select('version,title,notes,published_at,is_required')
+      .eq('is_active', true)
+      .order('published_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn('Không đọc được thông tin phiên bản:', error.message);
+      return null;
+    }
     return data;
   }
 
@@ -445,7 +514,12 @@
     refreshFromCloud,
     updateMyProfile,
     listUsers,
+    getAdminDashboard,
     updateUser,
+    listAuditLogs,
+    createAdminUser,
+    sendPasswordReset,
+    getLatestRelease,
     getCurrentUser,
     getCurrentProfile
   };
