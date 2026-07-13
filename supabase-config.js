@@ -6,6 +6,6 @@
  * 3) Chỉ dùng Publishable key (hoặc anon key cũ). KHÔNG dùng secret/service_role key.
  */
 window.CMCS_CONFIG = {
-  supabaseUrl: 'https://YOUR_PROJECT_REF.supabase.co',
-  supabaseKey: 'sb_publishable_REPLACE_ME'
+  supabaseUrl: 'https://yehssipuvquzwzwrkaqv.supabase.co',
+  supabaseKey: 'sb_publishable_wFJYeDSenFuwclzdNeGfDA_yjCkIk0o'
 };
