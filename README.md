@@ -76,3 +76,4 @@ Supabase Auth cần thêm `http://localhost:8080/**` vào Redirect URLs nếu th
 - Khóa tài khoản trực tiếp trong Supabase Auth; hiện tại là khóa truy cập ứng dụng theo trường `status`.
 - Phân quyền nhân viên cùng quản lý một giàn chim.
 - Phân tích AI và nhận diện hành vi từ video.
+- Cập nhật triển khai PWA
