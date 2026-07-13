@@ -1,0 +1,21 @@
+{
+  "id": "./",
+  "name": "Chào Mào Chiến Suốt Pro",
+  "short_name": "Chào Mào Pro",
+  "description": "Ứng dụng cloud đa người dùng quản lý hồ sơ, dinh dưỡng, huấn luyện, sức khỏe và thi đấu chim Chào Mào.",
+  "lang": "vi",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#fffaf4",
+  "theme_color": "#7f1d1d",
+  "icons": [
+    {"src":"assets/icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"assets/icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ],
+  "shortcuts": [
+    {"name":"Giàn chim","short_name":"Giàn chim","url":"./#birds","icons":[{"src":"assets/icons/icon-192.png","sizes":"192x192"}]},
+    {"name":"Trợ lý thi đấu","short_name":"Thi đấu","url":"./#tournament","icons":[{"src":"assets/icons/icon-192.png","sizes":"192x192"}]}
+  ]
+}

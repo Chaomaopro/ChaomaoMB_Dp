@@ -1,0 +1,17 @@
+CHÀO MÀO CHIẾN SUỐT PRO v2.0 CLOUD — KIỂM TRA ĐÓNG GÓI
+
+Đã kiểm tra:
+- app.js: hợp lệ cú pháp JavaScript.
+- cloud.js: hợp lệ cú pháp JavaScript.
+- manifest.webmanifest: hợp lệ JSON.
+- Toàn bộ tài nguyên khai báo trong Service Worker có tồn tại.
+- Icon 192x192 và 512x512 đúng định dạng PNG.
+- Cloud adapter đã được chạy thử với Supabase giả lập: đăng nhập, tải dữ liệu, lưu cloud và danh sách quản trị hoạt động.
+- Chế độ chưa cấu hình Supabase hiển thị đúng yêu cầu thiết lập.
+
+Chưa thể kiểm tra trong môi trường này:
+- Đăng nhập vào dự án Supabase thật của người dùng.
+- Email xác nhận thật.
+- GitHub Pages thật.
+
+Ba phần trên phải được kiểm tra sau khi điền Project URL/Publishable key và chạy schema.sql.
