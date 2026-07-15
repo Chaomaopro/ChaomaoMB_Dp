@@ -1,4 +1,4 @@
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.1.2';
 const PLAN_LIMITS = { free: 3, pro: 30, owner: 500 };
 
 const DEFAULT_DATA = {
@@ -175,7 +175,12 @@ function accountHtml(){
     <div class="field"><label>Tên hiển thị</label><input name="fullName" required maxlength="120" value="${esc(currentProfile?.full_name||'')}"></div>
     <button class="fab-action" type="submit">Cập nhật tài khoản</button>
   </form>
-  <div class="button-row section"><button class="secondary-btn" data-action="force-sync">Đồng bộ ngay</button><button class="danger-btn" data-action="logout">Đăng xuất</button></div>`;
+  <div class="button-row section">
+    <button class="secondary-btn" data-action="force-sync">Đồng bộ 2 chiều</button>
+    <button class="secondary-btn" data-action="push-cloud">Gửi lên cloud</button>
+    <button class="secondary-btn" data-action="pull-cloud">Nhận từ cloud</button>
+    <button class="danger-btn" data-action="logout">Đăng xuất</button>
+  </div>`;
 }
 
 async function openAdminDashboard(){
@@ -395,7 +400,7 @@ function renderMore(){
       </div>
       <div class="data-row"><span>Trạng thái cloud</span><strong><span class="badge ${syncBadge}">${esc(syncState.message||'')}</span></strong></div>
       <div class="data-row"><span>Giới hạn hồ sơ chim</span><strong>${data.birds.length}/${getBirdLimit()}</strong></div>
-      <div class="button-row"><button class="secondary-btn" data-action="account">Tài khoản</button><button class="secondary-btn" data-action="force-sync">Đồng bộ ngay</button></div>
+      <div class="button-row"><button class="secondary-btn" data-action="account">Tài khoản</button><button class="secondary-btn" data-action="force-sync">Đồng bộ 2 chiều</button></div>
     </section>
     ${isAdmin?`<section class="section"><button class="card admin-entry" data-action="admin-dashboard"><span class="badge warning">★ Chủ hệ thống</span><h3>Trung tâm quản trị</h3><p>Dashboard, tạo tài khoản, quản lý gói và nhật ký thao tác.</p></button></section>`:''}
     <section class="grid-2 section">
@@ -458,7 +463,35 @@ function handleAction(action){
   if(action==='logout') window.CMCSCloud.signOut().catch(error=>showToast(error.message));
   if(action==='force-sync'){
     window.CMCSCloud.forceSync(data)
-      .then(()=>{showToast('Đã đồng bộ dữ liệu lên Supabase.'); render();})
+      .then(result=>{
+        if(result?.data) data=result.data;
+        const message=result?.direction==='upload'
+          ? 'Đã gửi dữ liệu thiết bị lên cloud.'
+          : result?.direction==='download'
+            ? 'Đã nhận dữ liệu mới từ cloud.'
+            : 'Dữ liệu thiết bị và cloud đã giống nhau.';
+        showToast(message);
+        render();
+      })
+      .catch(error=>showToast(error.message));
+  }
+  if(action==='push-cloud'){
+    window.CMCSCloud.pushToCloud(data)
+      .then(result=>{
+        if(result?.data) data=result.data;
+        showToast('Đã gửi và kiểm tra dữ liệu trên cloud.');
+        render();
+      })
+      .catch(error=>showToast(error.message));
+  }
+  if(action==='pull-cloud'){
+    if(!confirm('Nhận dữ liệu từ cloud sẽ thay dữ liệu hiện có trên thiết bị. Tiếp tục?')) return;
+    window.CMCSCloud.pullFromCloud(DEFAULT_DATA)
+      .then(result=>{
+        if(result?.data) data=result.data;
+        showToast('Đã nhận dữ liệu mới từ cloud.');
+        render();
+      })
       .catch(error=>showToast(error.message));
   }
 }

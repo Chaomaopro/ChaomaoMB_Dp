@@ -337,14 +337,18 @@
 
   function save(appData) {
     if (!currentUser) return;
-    writeEnvelope(currentUser.id, appData, { dirty: true, updatedAt: nowIso() });
-    setSyncState(navigator.onLine ? 'syncing' : 'offline', navigator.onLine ? 'Đang đồng bộ…' : 'Đã lưu trên máy, chờ có mạng');
+    const snapshot = clone(appData);
+    writeEnvelope(currentUser.id, snapshot, { dirty: true, updatedAt: nowIso() });
+    setSyncState(
+      navigator.onLine ? 'syncing' : 'offline',
+      navigator.onLine ? 'Đang lưu thay đổi lên cloud…' : 'Đã lưu trên máy, chờ có mạng'
+    );
 
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       if (!navigator.onLine || !currentUser) return;
       try {
-        await upsertCloudData(currentUser.id, appData);
+        await upsertCloudData(currentUser.id, snapshot);
       } catch (error) {
         console.error(error);
         setSyncState('error', `Lỗi đồng bộ: ${error.message}`);
@@ -352,11 +356,99 @@
     }, 650);
   }
 
+  async function pushToCloud(appData) {
+    if (!currentUser) throw new Error('Chưa đăng nhập.');
+    if (!navigator.onLine) throw new Error('Thiết bị đang ngoại tuyến.');
+
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+
+    const snapshot = clone(appData);
+    writeEnvelope(currentUser.id, snapshot, { dirty: true, updatedAt: nowIso() });
+    setSyncState('syncing', 'Đang gửi dữ liệu thiết bị lên cloud…');
+
+    await upsertCloudData(currentUser.id, snapshot);
+
+    const verified = await fetchCloudRecord(currentUser.id);
+    if (!verified?.data) throw new Error('Đã gửi nhưng không đọc lại được dữ liệu từ cloud.');
+
+    const merged = mergeDefault(appDefaultData, verified.data);
+    lastCloudUpdatedAt = verified.updated_at;
+    writeEnvelope(currentUser.id, merged, {
+      dirty: false,
+      updatedAt: verified.updated_at
+    });
+    setSyncState('synced', 'Đã gửi và kiểm tra dữ liệu trên cloud');
+
+    return {
+      direction: 'upload',
+      data: merged,
+      updatedAt: verified.updated_at
+    };
+  }
+
+  async function pullFromCloud(defaultData = appDefaultData) {
+    if (!currentUser) throw new Error('Chưa đăng nhập.');
+    if (!navigator.onLine) throw new Error('Thiết bị đang ngoại tuyến.');
+
+    setSyncState('syncing', 'Đang tải dữ liệu mới từ cloud…');
+    const record = await fetchCloudRecord(currentUser.id);
+    if (!record?.data) throw new Error('Cloud chưa có dữ liệu cho tài khoản này.');
+
+    const merged = mergeDefault(defaultData, record.data);
+    lastCloudUpdatedAt = record.updated_at;
+    writeEnvelope(currentUser.id, merged, {
+      dirty: false,
+      updatedAt: record.updated_at
+    });
+    setSyncState('synced', 'Đã tải dữ liệu mới từ cloud');
+
+    return {
+      direction: 'download',
+      data: merged,
+      updatedAt: record.updated_at
+    };
+  }
+
   async function forceSync(appData) {
     if (!currentUser) throw new Error('Chưa đăng nhập.');
     if (!navigator.onLine) throw new Error('Thiết bị đang ngoại tuyến.');
-    setSyncState('syncing', 'Đang đồng bộ…');
-    return upsertCloudData(currentUser.id, appData);
+
+    const envelope = readEnvelope(currentUser.id);
+    const record = await fetchCloudRecord(currentUser.id);
+
+    // Có thay đổi chưa gửi trên thiết bị: ưu tiên gửi lên cloud.
+    if (envelope?.dirty) {
+      return pushToCloud(appData);
+    }
+
+    // Cloud chưa có bản ghi: tạo từ dữ liệu thiết bị.
+    if (!record?.data) {
+      return pushToCloud(appData);
+    }
+
+    const cloudTime = Date.parse(record.updated_at || 0);
+    const knownCloudTime = Date.parse(lastCloudUpdatedAt || 0);
+    const cloudMerged = mergeDefault(appDefaultData, record.data);
+
+    // Có bản mới hơn từ điện thoại/máy khác: tải về.
+    if (!lastCloudUpdatedAt || cloudTime > knownCloudTime) {
+      return pullFromCloud(appDefaultData);
+    }
+
+    // Nếu dữ liệu sạch nhưng khác cloud, lấy cloud để tránh thiết bị cũ ghi đè.
+    if (JSON.stringify(cloudMerged) !== JSON.stringify(appData)) {
+      return pullFromCloud(appDefaultData);
+    }
+
+    setSyncState('synced', 'Dữ liệu trên thiết bị và cloud đã giống nhau');
+    return {
+      direction: 'none',
+      data: clone(appData),
+      updatedAt: record.updated_at
+    };
   }
 
   async function refreshFromCloud(defaultData, localData) {
@@ -511,6 +603,8 @@
     signOut,
     save,
     forceSync,
+    pushToCloud,
+    pullFromCloud,
     refreshFromCloud,
     updateMyProfile,
     listUsers,

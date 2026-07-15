@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cmcs-pro-v2.1.1-full';
+const CACHE_NAME = 'cmcs-pro-v2.1.2-sync-fix';
 const APP_SHELL = [
   './',
   './index.html',
