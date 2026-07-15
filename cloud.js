@@ -6,7 +6,7 @@
   const PROFILE_PREFIX = 'cmcs-profile-cloud-v2:';
   const EMPTY_ARRAY_FIELDS = [
     'birds', 'tasks', 'performances', 'healthLogs',
-    'nutritionLogs', 'trainingLogs', 'tournamentSessions'
+    'nutritionLogs', 'trainingLogs', 'tournamentSessions', 'carePlans'
   ];
 
   let client = null;

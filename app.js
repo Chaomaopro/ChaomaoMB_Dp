@@ -1,4 +1,4 @@
-const APP_VERSION = '2.1.2';
+const APP_VERSION = '2.2.0';
 const PLAN_LIMITS = { free: 3, pro: 30, owner: 500 };
 
 const DEFAULT_DATA = {
@@ -9,7 +9,8 @@ const DEFAULT_DATA = {
   healthLogs: [],
   nutritionLogs: [],
   trainingLogs: [],
-  tournamentSessions: []
+  tournamentSessions: [],
+  carePlans: []
 };
 
 let data = structuredClone(DEFAULT_DATA);
@@ -52,6 +53,29 @@ function esc(v=''){ return String(v).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':
 function dateToLocalISO(date=new Date()){ const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0'); return `${y}-${m}-${d}`; }
 function todayISO(){ return dateToLocalISO(new Date()); }
 function formatDate(value){ if(!value) return 'Chưa cập nhật'; const d=new Date(value+'T00:00:00'); return d.toLocaleDateString('vi-VN'); }
+
+function parseLocalDate(value){ return value ? new Date(`${value}T00:00:00`) : null; }
+function addDaysISO(value,days){ const d=parseLocalDate(value)||new Date(); d.setDate(d.getDate()+Number(days||0)); return dateToLocalISO(d); }
+function daysBetween(start,end=todayISO()){ const a=parseLocalDate(start),b=parseLocalDate(end); if(!a||!b)return null; return Math.floor((b-a)/86400000); }
+function cycleStageOptions(selected=''){
+  return ['Chưa theo dõi','Bắt đầu rụng lông','Rụng lông mạnh','Ra lông ống','Hoàn thiện lông','Khô lông','Xong lông']
+    .map(x=>`<option ${x===selected?'selected':''}>${x}</option>`).join('');
+}
+function birdCycleText(b){
+  if(b.fireCareStartDate){
+    const days=daysBetween(b.fireCareStartDate);
+    return `Chăm lửa sau lông${Number.isFinite(days)?` · ngày ${days+1}`:''}`;
+  }
+  if(b.moltCompleteDate){
+    const dry=Number(b.featherDryPercent||0);
+    return `Xong lông ${formatDate(b.moltCompleteDate)}${dry?` · khô ${dry}%`:''}`;
+  }
+  if(b.moltStartDate){
+    const days=daysBetween(b.moltStartDate);
+    return `${b.moltStage||'Đang thay lông'}${Number.isFinite(days)?` · ngày ${days+1}`:''}`;
+  }
+  return 'Chưa khai báo chu kỳ lông';
+}
 function showToast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.remove('hidden'); clearTimeout(t._to); t._to=setTimeout(()=>t.classList.add('hidden'),2400); }
 function openModal(title, html){ modalTitle.textContent=title; modalBody.innerHTML=html; modalBackdrop.classList.remove('hidden'); }
 function closeModal(){ modalBackdrop.classList.add('hidden'); modalBody.innerHTML=''; }
@@ -112,6 +136,7 @@ function showApp(payload){
   currentProfile = payload.profile;
   data = payload.data || structuredClone(DEFAULT_DATA);
   data.profile ||= structuredClone(DEFAULT_DATA.profile);
+  data.carePlans ||= [];
   data.profile.owner = currentProfile.full_name || data.profile.owner || 'Nghệ nhân';
   data.profile.version = APP_VERSION;
   authScreen.classList.add('hidden');
@@ -341,8 +366,8 @@ function renderDashboard(){
       <button class="card" data-action="add-health" style="text-align:left;border:1px solid var(--line)"><span class="badge danger">🩺 Sức khỏe</span><h3 style="margin:10px 0 4px">Ghi bất thường</h3><p style="color:var(--muted);font-size:13px">Phân, hô hấp, chân và thể trạng.</p></button>
     </section>`;
 }
-function taskHtml(t){ return `<div class="list-item ${t.done?'task-done':''}"><button class="check-btn ${t.done?'done':''}" data-task-toggle="${t.id}">${t.done?'✓':''}</button><div class="grow"><h3>${esc(t.time)} · ${esc(t.title)}</h3><p>${esc(t.birdId?birdName(t.birdId):'Toàn giàn')} ${t.note?'· '+esc(t.note):''}</p></div><button class="icon-btn" data-task-delete="${t.id}" style="width:34px;height:34px">⋯</button></div>`; }
-function birdCardHtml(b){ const score=getBirdScore(b.id); return `<div class="list-item" data-bird-open="${b.id}"><div class="avatar">🪶</div><div class="grow"><h3>${esc(b.name)}</h3><p>${esc(b.origin||'Chưa rõ vùng')} · ${esc(b.ageGroup||'Chưa rõ tuổi')}</p><div style="margin-top:6px">${statusBadge(b.stage)}</div></div><div class="score">${score?score.toFixed(1):'–'}</div></div>`; }
+function taskHtml(t){ const planBadge=t.planType?`<span class="badge ${t.planType==='molt'?'warning':'success'}">${t.planType==='molt'?'Thay lông':'Chăm lửa'}</span> `:''; return `<div class="list-item ${t.done?'task-done':''}"><button class="check-btn ${t.done?'done':''}" data-task-toggle="${t.id}">${t.done?'✓':''}</button><div class="grow"><h3>${esc(t.time)} · ${esc(t.title)}</h3><p>${planBadge}${esc(t.birdId?birdName(t.birdId):'Toàn giàn')} ${t.note?'· '+esc(t.note):''}</p></div><button class="icon-btn" data-task-delete="${t.id}" style="width:34px;height:34px">⋯</button></div>`; }
+function birdCardHtml(b){ const score=getBirdScore(b.id); return `<div class="list-item" data-bird-open="${b.id}"><div class="avatar">🪶</div><div class="grow"><h3>${esc(b.name)}</h3><p>${esc(b.origin||'Chưa rõ vùng')} · ${esc(b.ageGroup||'Chưa rõ tuổi')}</p><p style="margin-top:5px;font-size:12px">${esc(birdCycleText(b))}</p><div style="margin-top:6px">${statusBadge(b.stage)}</div></div><div class="score">${score?score.toFixed(1):'–'}</div></div>`; }
 
 function renderBirds(){
   appContent.innerHTML=`
@@ -414,7 +439,32 @@ function renderMore(){
     <section class="section"><div class="card"><div class="data-row"><span>Phiên bản</span><strong>${esc(APP_VERSION)}</strong></div><div class="data-row"><span>Chế độ</span><strong>PWA Cloud đa người dùng</strong></div><div class="data-row"><span>Lưu ảnh cloud</span><strong>Đã tắt</strong></div><div class="data-row"><span>Tác giả</span><strong>Minh Đức</strong></div></div></section>`;
 }
 
-function birdForm(){ return `<form id="bird-form" class="form-grid"><div class="field"><label>Tên chim *</label><input name="name" required placeholder="Ví dụ: Chiến Tướng"></div><div class="form-row"><div class="field"><label>Vùng miền</label><select name="origin"><option>Huế</option><option>Trung Mang</option><option>Bình Điền</option><option>Quảng Nam</option><option>Quảng Ngãi</option><option>Tây Nguyên</option><option>Không xác định</option></select></div><div class="field"><label>Lứa tuổi</label><select name="ageGroup"><option>Chim tơ</option><option>Tơ một mùa</option><option>Hai mùa</option><option>Ba mùa trở lên</option><option>Chim già rừng</option></select></div></div><div class="field"><label>Giai đoạn hiện tại</label><select name="stage"><option>Dưỡng ổn định</option><option>Thay lông</option><option>Khô lông</option><option>Lên lửa</option><option>Đạt điểm rơi</option><option>Sau thi</option><option>Điều trị</option><option>Cách ly</option></select></div><div class="field"><label>Lối chơi nổi bật</label><input name="style" placeholder="Sàn cầu nhanh, bung cánh, ra bọng đều..."></div><div class="field"><label>Thành tích</label><textarea name="achievements" placeholder="Top 10, cờ, cúp..."></textarea></div><button class="fab-action" type="submit">Lưu hồ sơ chim</button></form>`; }
+function birdForm(){ return `<form id="bird-form" class="form-grid">
+  <div class="field"><label>Tên chim *</label><input name="name" required placeholder="Ví dụ: Chiến Tướng"></div>
+  <div class="form-row">
+    <div class="field"><label>Vùng miền</label><select name="origin"><option>Huế</option><option>Trung Mang</option><option>Bình Điền</option><option>Quảng Nam</option><option>Quảng Ngãi</option><option>Tây Nguyên</option><option>Không xác định</option></select></div>
+    <div class="field"><label>Lứa tuổi</label><select name="ageGroup"><option>Chim tơ</option><option>Tơ một mùa</option><option>Hai mùa</option><option>Ba mùa trở lên</option><option>Chim già rừng</option></select></div>
+  </div>
+  <div class="field"><label>Giai đoạn hiện tại</label><select name="stage"><option>Dưỡng ổn định</option><option>Thay lông</option><option>Khô lông</option><option>Lên lửa</option><option>Đạt điểm rơi</option><option>Sau thi</option><option>Điều trị</option><option>Cách ly</option></select></div>
+  <details class="card">
+    <summary><strong>Chu kỳ lông và chăm lửa</strong></summary>
+    <div class="form-grid" style="margin-top:14px">
+      <div class="form-row">
+        <div class="field"><label>Ngày bắt đầu thay lông</label><input type="date" name="moltStartDate"></div>
+        <div class="field"><label>Giai đoạn lông</label><select name="moltStage">${cycleStageOptions('Chưa theo dõi')}</select></div>
+      </div>
+      <div class="form-row">
+        <div class="field"><label>Ngày xong lông</label><input type="date" name="moltCompleteDate"></div>
+        <div class="field"><label>Độ khô lông (%)</label><input type="number" min="0" max="100" name="featherDryPercent" value="0"></div>
+      </div>
+      <div class="field"><label>Ngày bắt đầu chăm lửa sau lông</label><input type="date" name="fireCareStartDate"></div>
+      <div class="field"><label>Ghi chú chu kỳ</label><textarea name="moltNotes" placeholder="Ví dụ: còn tuyết cánh, đuôi chưa khô, phân ổn định..."></textarea></div>
+    </div>
+  </details>
+  <div class="field"><label>Lối chơi nổi bật</label><input name="style" placeholder="Sàn cầu nhanh, bung cánh, ra bọng đều..."></div>
+  <div class="field"><label>Thành tích</label><textarea name="achievements" placeholder="Top 10, cờ, cúp..."></textarea></div>
+  <button class="fab-action" type="submit">Lưu hồ sơ chim</button>
+</form>`; }
 function taskForm(){ return `<form id="task-form" class="form-grid"><div class="field"><label>Công việc *</label><input name="title" required placeholder="Phơi nắng, tắm nước, tập lực..."></div><div class="form-row"><div class="field"><label>Ngày</label><input type="date" name="date" value="${todayISO()}" required></div><div class="field"><label>Giờ</label><input type="time" name="time" value="07:00" required></div></div><div class="field"><label>Áp dụng cho chim</label><select name="birdId"><option value="">Toàn giàn</option>${data.birds.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></div><div class="field"><label>Ghi chú</label><textarea name="note"></textarea></div><button class="fab-action" type="submit">Tạo lịch chăm</button></form>`; }
 function performanceForm(){ return `<form id="performance-form" class="form-grid"><div class="field"><label>Chọn chim *</label><select name="birdId" required><option value="">-- Chọn chim --</option>${data.birds.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></div><div class="field"><label>Ngày đánh giá</label><input type="date" name="date" value="${todayISO()}"></div>${['Lông','Lửa','Thái độ đấu','Giọng','Bộ chơi','Thể lực','Độ bền','Tâm lý','Tiêu hóa','Phục hồi'].map((x,i)=>`<div class="field"><label>${x}: <strong id="score-${i}">7</strong>/10</label><input type="range" min="1" max="10" value="7" name="s${i}" data-score-label="score-${i}"></div>`).join('')}<div class="field"><label>Nhận xét</label><textarea name="note"></textarea></div><button class="fab-action" type="submit">Lưu điểm phong độ</button></form>`; }
 function healthForm(){ return `<form id="health-form" class="form-grid"><div class="field"><label>Chọn chim *</label><select name="birdId" required><option value="">-- Chọn chim --</option>${data.birds.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></div><div class="field"><label>Ngày ghi nhận</label><input type="date" name="date" value="${todayISO()}"></div><div class="field"><label>Triệu chứng chính *</label><select name="symptom" required><option>Phân nát/phân nước</option><option>Ho/khè</option><option>Xù lông</option><option>Đau chân</option><option>Rận mạt</option><option>Cắn đuôi/cắn cánh</option><option>Bỏ ăn</option><option>Khác</option></select></div><div class="field"><label>Mức cảnh báo</label><select name="level"><option>Xanh - theo dõi</option><option>Vàng - cần điều chỉnh</option><option>Cam - cách ly/đánh giá</option><option>Đỏ - cần hỗ trợ thú y</option></select></div><div class="field"><label>Ghi chú xử lý</label><textarea name="note" placeholder="Mô tả phân, mức ăn, hô hấp, thay đổi khẩu phần..."></textarea></div><button class="fab-action" type="submit">Lưu nhật ký sức khỏe</button></form>`; }
@@ -423,11 +473,167 @@ function simpleLogForm(type){
   return `<form id="${type}-form" class="form-grid"><div class="field"><label>Chọn chim *</label><select name="birdId" required><option value="">-- Chọn chim --</option>${data.birds.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></div><div class="field"><label>Ngày</label><input type="date" name="date" value="${todayISO()}"></div><div class="field"><label>${nutrition?'Nội dung khẩu phần':'Hình thức tập luyện'}</label>${nutrition?'<textarea name="detail" required placeholder="Cám chính, mồi tươi, trái cây, vitamin..."></textarea>':'<select name="detail"><option>Tắm nắng</option><option>Tắm nước</option><option>Lồng lực</option><option>Dợt nhẹ</option><option>Dợt vừa sức</option><option>Dợt căng</option><option>Mô phỏng thi đấu</option></select>'}</div><div class="field"><label>${nutrition?'Phản ứng của chim':'Thời lượng và kết quả'}</label><textarea name="note"></textarea></div><button class="fab-action" type="submit">Lưu nhật ký</button></form>`;
 }
 
+
+function birdCycleForm(b){
+  return `<form id="bird-cycle-form" class="form-grid">
+    <input type="hidden" name="birdId" value="${b.id}">
+    <div class="field"><label>Trạng thái tổng quát</label><select name="stage">
+      ${['Dưỡng ổn định','Thay lông','Khô lông','Lên lửa','Đạt điểm rơi','Sau thi','Điều trị','Cách ly'].map(x=>`<option ${x===b.stage?'selected':''}>${x}</option>`).join('')}
+    </select></div>
+    <div class="form-row">
+      <div class="field"><label>Ngày bắt đầu thay lông</label><input type="date" name="moltStartDate" value="${esc(b.moltStartDate||'')}"></div>
+      <div class="field"><label>Giai đoạn lông</label><select name="moltStage">${cycleStageOptions(b.moltStage||'Chưa theo dõi')}</select></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Ngày xong lông</label><input type="date" name="moltCompleteDate" value="${esc(b.moltCompleteDate||'')}"></div>
+      <div class="field"><label>Độ khô lông (%)</label><input type="number" min="0" max="100" name="featherDryPercent" value="${Number(b.featherDryPercent||0)}"></div>
+    </div>
+    <div class="field"><label>Ngày bắt đầu chăm lửa sau lông</label><input type="date" name="fireCareStartDate" value="${esc(b.fireCareStartDate||'')}"></div>
+    <div class="field"><label>Ghi chú chu kỳ</label><textarea name="moltNotes" placeholder="Tình trạng lông ống, tuyết cánh, đuôi, phân và mức ăn...">${esc(b.moltNotes||'')}</textarea></div>
+    <div class="notice">Ngày bắt đầu là mốc để ứng dụng tự tạo giáo án. Có thể cập nhật lại bất cứ lúc nào theo tiến độ thực tế của từng con.</div>
+    <button class="fab-action" type="submit">Lưu chu kỳ lông</button>
+  </form>`;
+}
+
+function removeExistingPlan(birdId,type){
+  const existing=data.carePlans.filter(p=>p.birdId===birdId && p.type===type);
+  if(!existing.length) return true;
+  const label=type==='molt'?'thay lông':'chăm lửa sau lông';
+  if(!confirm(`Chim đã có giáo án ${label}. Tạo lại sẽ xóa lịch cũ của giáo án này. Tiếp tục?`)) return false;
+  const ids=new Set(existing.map(p=>p.id));
+  data.tasks=data.tasks.filter(t=>!ids.has(t.planId));
+  data.carePlans=data.carePlans.filter(p=>!ids.has(p.id));
+  return true;
+}
+
+function planTask(plan,bird,date,time,title,note,phase){
+  return {id:uid(),planId:plan.id,planType:plan.type,birdId:bird.id,date,time,title,note,phase,done:false};
+}
+
+function createMoltPlan(birdId){
+  const bird=data.birds.find(b=>b.id===birdId); if(!bird)return;
+  if(!bird.moltStartDate){
+    showToast('Hãy nhập ngày bắt đầu thay lông trước.');
+    return openModal(`Chu kỳ lông · ${bird.name}`,birdCycleForm(bird));
+  }
+  if(!removeExistingPlan(birdId,'molt'))return;
+
+  const phases=[
+    {from:1,to:2,name:'Bắt đầu rụng lông',note:'Giữ cám quen và nhịp sinh hoạt ổn định; hạn chế cội, lồng lực và mọi thay đổi mạnh.'},
+    {from:3,to:5,name:'Rụng lông mạnh',note:'Ưu tiên nghỉ, môi trường yên; theo dõi phân, mức ăn và tốc độ rụng lông. Không ép lửa.'},
+    {from:6,to:8,name:'Ra lông ống',note:'Duy trì dinh dưỡng quen thuộc; mồi tươi và trái cây điều chỉnh theo cơ địa, không tăng đồng thời nhiều yếu tố.'},
+    {from:9,to:10,name:'Hoàn thiện lông',note:'Nắng nhẹ và tắm phù hợp thời tiết; chỉ vận động rất nhẹ khi chim khỏe, phân ổn định.'},
+    {from:11,to:12,name:'Khô lông',note:'Cập nhật phần trăm khô lông mỗi tuần; chưa dợt căng khi lông chưa khô và chim chưa hồi nền.'}
+  ];
+  const plan={id:uid(),birdId,type:'molt',name:'Giáo án thay lông 12 tuần',startDate:bird.moltStartDate,endDate:addDaysISO(bird.moltStartDate,83),createdAt:new Date().toISOString(),status:'active',phases};
+  const tasks=[];
+  for(let week=1;week<=12;week++){
+    const phase=phases.find(p=>week>=p.from&&week<=p.to);
+    const base=addDaysISO(plan.startDate,(week-1)*7);
+    const prefix=`Tuần ${week} · ${phase.name}`;
+    tasks.push(planTask(plan,bird,base,'06:30',`${prefix}: đánh giá đầu tuần`,`${phase.note} Ghi nhận phân, lượng ăn, lông rụng và biểu hiện xù/ngủ ngày.`,phase.name));
+    tasks.push(planTask(plan,bird,addDaysISO(base,2),'07:00',`${prefix}: nắng nhẹ`,`Phơi nắng nhẹ theo thời tiết, tránh nắng gắt và gió lùa. Dừng nếu chim há mỏ, xù hoặc mệt.`,phase.name));
+    tasks.push(planTask(plan,bird,addDaysISO(base,4),'14:30',`${prefix}: tắm và vệ sinh`,`Tắm nước khi nhiệt độ phù hợp; để khô lông hoàn toàn, vệ sinh lồng/cóng và theo dõi ho sau tắm.`,phase.name));
+    tasks.push(planTask(plan,bird,addDaysISO(base,6),'16:30',`${prefix}: tổng kết`,`Cập nhật giai đoạn lông, phần trăm khô lông và ghi chú phản ứng với khẩu phần trong tuần.`,phase.name));
+  }
+  data.carePlans.push(plan); data.tasks.push(...tasks); saveData();
+  showToast('Đã tạo giáo án thay lông 12 tuần.');
+  openPlanDetail(plan.id);
+}
+
+function createFirePlan(birdId){
+  const bird=data.birds.find(b=>b.id===birdId); if(!bird)return;
+  const start=bird.fireCareStartDate||bird.moltCompleteDate;
+  if(!start){
+    showToast('Hãy nhập ngày xong lông hoặc ngày bắt đầu chăm lửa.');
+    return openModal(`Chu kỳ lông · ${bird.name}`,birdCycleForm(bird));
+  }
+  if(Number(bird.featherDryPercent||0)<70 && !confirm('Độ khô lông đang dưới 70%. Chỉ nên tạo kế hoạch để tham khảo và chưa tăng tải cho đến khi chim ổn định. Tiếp tục?'))return;
+  if(!removeExistingPlan(birdId,'post_molt_fire'))return;
+
+  const weeks=[
+    {name:'Hồi nền sau lông',force:'Lồng lực rất nhẹ 10–15 phút hoặc vận động tự nhiên.',dai:'Không dợt căng; có thể treo xa cội ngắn nếu chim hoàn toàn ổn định.',note:'Giữ cám quen, ổn định tiêu hóa và giấc ngủ.'},
+    {name:'Củng cố thể lực',force:'Lồng lực nhẹ 15–20 phút, 1–2 buổi tùy sức.',dai:'Làm quen cội 15–20 phút, treo vị trí dễ chịu.',note:'Chỉ tăng một yếu tố mỗi lần; theo dõi hồi phục trong 24 giờ.'},
+    {name:'Vào lửa nhẹ',force:'Lồng lực 20–25 phút, có ngày nghỉ xen kẽ.',dai:'Dợt vừa sức 20–30 phút; dừng khi chậm cầu, xù hoặc bỏ đấu.',note:'Giữ khẩu phần ổn định, tránh đổi cám hoặc tăng mồi đột ngột.'},
+    {name:'Củng cố lửa',force:'Lồng lực 25–30 phút nếu chim hồi tốt.',dai:'Dợt 30–45 phút, ưu tiên giữ bộ và tâm lý hơn ép thời gian.',note:'Đánh giá bọng, sàn cầu, phân và thời gian hồi sau cội.'},
+    {name:'Xây độ bền',force:'Hai buổi lực vừa, cách nhau ít nhất một ngày nghỉ.',dai:'Dợt 45–60 phút nếu các tuần trước hồi tốt.',note:'Không tăng tải khi phân xấu, giảm ăn, ho, đau chân hoặc xù lông.'},
+    {name:'Chốt điểm rơi',force:'Giảm khối lượng, giữ nhịp vận động quen thuộc.',dai:'Một buổi kiểm tra ngắn 20–30 phút; không dợt sát ngày mục tiêu.',note:'Không đổi cám, không thử thuốc/vitamin/mồi mới; ưu tiên ngủ và hồi phục.'}
+  ];
+  const plan={id:uid(),birdId,type:'post_molt_fire',name:'Giáo án chăm lửa sau lông 6 tuần',startDate:start,endDate:addDaysISO(start,41),createdAt:new Date().toISOString(),status:'active',phases:weeks.map((w,i)=>({from:i+1,to:i+1,name:w.name,note:w.note}))};
+  const tasks=[];
+  weeks.forEach((w,index)=>{
+    const week=index+1, base=addDaysISO(start,index*7), prefix=`Tuần ${week} · ${w.name}`;
+    tasks.push(planTask(plan,bird,base,'06:30',`${prefix}: kiểm tra nền`,`${w.note} Ghi phân, mức ăn, giọng sáng, bộ lông và tinh thần.`,w.name));
+    tasks.push(planTask(plan,bird,addDaysISO(base,1),'07:00',`${prefix}: nắng sáng`,`Nắng nhẹ theo thời tiết; tăng dần rất chậm, không ép khi chim đang yếu hoặc hô hấp bất thường.`,w.name));
+    tasks.push(planTask(plan,bird,addDaysISO(base,3),'08:00',`${prefix}: tập lực`,w.force,w.name));
+    tasks.push(planTask(plan,bird,addDaysISO(base,5),'08:00',`${prefix}: dợt thứ Bảy`,w.dai,w.name));
+    tasks.push(planTask(plan,bird,addDaysISO(base,6),'16:30',`${prefix}: đánh giá hồi phục`,`So sánh trước/sau dợt: phân, ăn, xù lông, giọng, bộ chơi và thời gian hồi. Chỉ tăng tuần kế tiếp nếu hồi tốt.`,w.name));
+  });
+  data.carePlans.push(plan); data.tasks.push(...tasks); saveData();
+  showToast('Đã tạo giáo án chăm lửa sau lông 6 tuần.');
+  openPlanDetail(plan.id);
+}
+
+function openBirdPlans(birdId){
+  const bird=data.birds.find(b=>b.id===birdId); if(!bird)return;
+  const plans=data.carePlans.filter(p=>p.birdId===birdId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  openModal(`Giáo án · ${bird.name}`,plans.length?`<div class="list">${plans.map(p=>{
+    const count=data.tasks.filter(t=>t.planId===p.id).length;
+    return `<div class="list-item"><div class="avatar">${p.type==='molt'?'🪶':'🔥'}</div><div class="grow"><h3>${esc(p.name)}</h3><p>${formatDate(p.startDate)} → ${formatDate(p.endDate)} · ${count} công việc</p></div><button class="secondary-btn" data-plan-open="${p.id}">Xem</button></div>`;
+  }).join('')}</div>`:`<div class="empty">Chưa có giáo án cho chim này.</div>`);
+}
+
+function openPlanDetail(planId){
+  const plan=data.carePlans.find(p=>p.id===planId); if(!plan)return;
+  const bird=data.birds.find(b=>b.id===plan.birdId);
+  const tasks=data.tasks.filter(t=>t.planId===planId).sort((a,b)=>`${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+  const upcoming=tasks.filter(t=>t.date>=todayISO()).slice(0,12);
+  openModal(plan.name,`
+    <div class="card">
+      <div class="data-row"><span>Chim</span><strong>${esc(bird?.name||'')}</strong></div>
+      <div class="data-row"><span>Thời gian</span><strong>${formatDate(plan.startDate)} → ${formatDate(plan.endDate)}</strong></div>
+      <div class="data-row"><span>Tổng công việc</span><strong>${tasks.length}</strong></div>
+    </div>
+    <section class="section"><div class="section-heading"><h2>Các giai đoạn</h2></div>
+      <div class="list">${(plan.phases||[]).map(p=>`<div class="list-item"><div class="avatar">▣</div><div class="grow"><h3>${esc(p.name)}</h3><p>${esc(p.note||'')}</p></div></div>`).join('')}</div>
+    </section>
+    <section class="section"><div class="section-heading"><h2>Lịch sắp tới</h2></div>
+      <div class="list">${upcoming.length?upcoming.map(taskHtml).join(''):`<div class="empty">Không còn công việc sắp tới.</div>`}</div>
+    </section>
+    <div class="button-row section"><button class="secondary-btn" data-plan-schedule>Đến lịch chăm</button><button class="danger-btn" data-plan-delete="${plan.id}">Xóa giáo án</button></div>
+  `);
+}
+
 function openBirdDetail(id){
   const b=data.birds.find(x=>x.id===id); if(!b) return;
   const perf=data.performances.filter(x=>x.birdId===id).sort((a,b)=>a.date.localeCompare(b.date));
   const latest=perf.at(-1);
-  openModal(b.name,`<div class="card"><div class="list-item" style="border:0;padding:0"><div class="avatar">🪶</div><div class="grow"><h3>${esc(b.name)}</h3><p>${esc(b.origin)} · ${esc(b.ageGroup)}</p>${statusBadge(b.stage)}</div><strong class="score">${latest?latest.total.toFixed(1):'–'}</strong></div></div><section class="section"><div class="card"><div class="data-row"><span>Lối chơi</span><strong>${esc(b.style||'Chưa cập nhật')}</strong></div><div class="data-row"><span>Thành tích</span><strong>${esc(b.achievements||'Chưa có')}</strong></div></div></section><section class="section"><div class="section-heading"><h2>Biểu đồ phong độ</h2></div><div class="card chart-wrap"><canvas id="performance-chart"></canvas></div></section><section class="section"><div class="button-row"><button class="secondary-btn" data-add-performance-bird="${b.id}">Chấm phong độ</button><button class="danger-btn" data-delete-bird="${b.id}">Xóa hồ sơ</button></div></section>`);
+  const planCount=data.carePlans.filter(p=>p.birdId===id).length;
+  openModal(b.name,`
+    <div class="card"><div class="list-item" style="border:0;padding:0"><div class="avatar">🪶</div><div class="grow"><h3>${esc(b.name)}</h3><p>${esc(b.origin)} · ${esc(b.ageGroup)}</p>${statusBadge(b.stage)}</div><strong class="score">${latest?latest.total.toFixed(1):'–'}</strong></div></div>
+    <section class="section"><div class="card">
+      <div class="data-row"><span>Lối chơi</span><strong>${esc(b.style||'Chưa cập nhật')}</strong></div>
+      <div class="data-row"><span>Thành tích</span><strong>${esc(b.achievements||'Chưa có')}</strong></div>
+    </div></section>
+    <section class="section"><div class="section-heading"><h2>Chu kỳ lông và lửa</h2><span class="badge warning">${planCount} giáo án</span></div>
+      <div class="card">
+        <div class="data-row"><span>Ngày bắt đầu thay lông</span><strong>${formatDate(b.moltStartDate)}</strong></div>
+        <div class="data-row"><span>Giai đoạn lông</span><strong>${esc(b.moltStage||'Chưa theo dõi')}</strong></div>
+        <div class="data-row"><span>Ngày xong lông</span><strong>${formatDate(b.moltCompleteDate)}</strong></div>
+        <div class="data-row"><span>Độ khô lông</span><strong>${Number(b.featherDryPercent||0)}%</strong></div>
+        <div class="data-row"><span>Bắt đầu chăm lửa</span><strong>${formatDate(b.fireCareStartDate)}</strong></div>
+        <div class="data-row"><span>Ghi chú</span><strong>${esc(b.moltNotes||'Chưa có')}</strong></div>
+      </div>
+      <div class="grid-2 section">
+        <button class="secondary-btn" data-bird-cycle="${b.id}">Cập nhật chu kỳ</button>
+        <button class="secondary-btn" data-bird-plans="${b.id}">Xem giáo án</button>
+        <button class="secondary-btn" data-generate-molt="${b.id}">Tạo giáo án thay lông</button>
+        <button class="secondary-btn" data-generate-fire="${b.id}">Chăm lửa sau lông</button>
+      </div>
+    </section>
+    <section class="section"><div class="section-heading"><h2>Biểu đồ phong độ</h2></div><div class="card chart-wrap"><canvas id="performance-chart"></canvas></div></section>
+    <section class="section"><div class="button-row"><button class="secondary-btn" data-add-performance-bird="${b.id}">Chấm phong độ</button><button class="danger-btn" data-delete-bird="${b.id}">Xóa hồ sơ</button></div></section>
+  `);
   requestAnimationFrame(()=>drawPerformanceChart(perf));
 }
 function drawPerformanceChart(rows){
@@ -549,8 +755,31 @@ appContent.addEventListener('click',e=>{
 
 modalBody.addEventListener('input',e=>{ if(e.target.matches('[data-score-label]')) $('#'+e.target.dataset.scoreLabel).textContent=e.target.value; });
 modalBody.addEventListener('click',e=>{
-  const del=e.target.closest('[data-delete-bird]'); if(del&&confirm('Xóa hồ sơ chim và dữ liệu liên quan?')){ const id=del.dataset.deleteBird; data.birds=data.birds.filter(x=>x.id!==id); data.performances=data.performances.filter(x=>x.birdId!==id);data.healthLogs=data.healthLogs.filter(x=>x.birdId!==id);saveData();closeModal();render(); }
+  const del=e.target.closest('[data-delete-bird]'); if(del&&confirm('Xóa hồ sơ chim và toàn bộ lịch/giáo án liên quan?')){
+    const id=del.dataset.deleteBird;
+    const planIds=new Set(data.carePlans.filter(p=>p.birdId===id).map(p=>p.id));
+    data.birds=data.birds.filter(x=>x.id!==id);
+    data.performances=data.performances.filter(x=>x.birdId!==id);
+    data.healthLogs=data.healthLogs.filter(x=>x.birdId!==id);
+    data.nutritionLogs=data.nutritionLogs.filter(x=>x.birdId!==id);
+    data.trainingLogs=data.trainingLogs.filter(x=>x.birdId!==id);
+    data.tasks=data.tasks.filter(x=>x.birdId!==id && !planIds.has(x.planId));
+    data.carePlans=data.carePlans.filter(x=>x.birdId!==id);
+    saveData();closeModal();render();
+  }
   const perf=e.target.closest('[data-add-performance-bird]'); if(perf){ openModal('Chấm phong độ tuần',performanceForm().replace(`value="${perf.dataset.addPerformanceBird}"`,`value="${perf.dataset.addPerformanceBird}" selected`)); }
+  const cycle=e.target.closest('[data-bird-cycle]'); if(cycle){ const bird=data.birds.find(b=>b.id===cycle.dataset.birdCycle); if(bird)openModal(`Chu kỳ lông · ${bird.name}`,birdCycleForm(bird)); }
+  const molt=e.target.closest('[data-generate-molt]'); if(molt)createMoltPlan(molt.dataset.generateMolt);
+  const fire=e.target.closest('[data-generate-fire]'); if(fire)createFirePlan(fire.dataset.generateFire);
+  const plans=e.target.closest('[data-bird-plans]'); if(plans)openBirdPlans(plans.dataset.birdPlans);
+  const planOpen=e.target.closest('[data-plan-open]'); if(planOpen)openPlanDetail(planOpen.dataset.planOpen);
+  const planDelete=e.target.closest('[data-plan-delete]'); if(planDelete&&confirm('Xóa giáo án và toàn bộ lịch do giáo án tạo ra?')){
+    const id=planDelete.dataset.planDelete;
+    data.tasks=data.tasks.filter(t=>t.planId!==id);
+    data.carePlans=data.carePlans.filter(p=>p.id!==id);
+    saveData();closeModal();render();showToast('Đã xóa giáo án.');
+  }
+  if(e.target.closest('[data-plan-schedule]')){ closeModal();setView('schedule'); }
   const adminEdit=e.target.closest('[data-admin-edit]'); if(adminEdit){ const user=adminUsersCache.find(x=>x.id===adminEdit.dataset.adminEdit); if(user)openModal('Cập nhật tài khoản',adminEditForm(user)); }
   const adminReset=e.target.closest('[data-admin-reset]'); if(adminReset&&confirm(`Gửi email đặt lại mật khẩu tới ${adminReset.dataset.adminReset}?`)){ window.CMCSCloud.sendPasswordReset(adminReset.dataset.adminReset).then(()=>showToast('Đã gửi email đặt lại mật khẩu.')).catch(error=>showToast(error.message)); }
 });
@@ -585,7 +814,19 @@ modalBody.addEventListener('submit',async e=>{
     }catch(error){ showToast(error.message); }
     return;
   }
-  if(e.target.id==='bird-form'){ if(!canAddBird()) return showToast(`Đã đạt giới hạn ${getBirdLimit()} chim của gói ${getEffectivePlan().toUpperCase()}.`); data.birds.push({id:uid(),...fd,createdAt:new Date().toISOString()}); saveData(); closeModal(); setView('birds'); showToast('Đã thêm hồ sơ chim.'); }
+  if(e.target.id==='bird-cycle-form'){
+    const bird=data.birds.find(b=>b.id===fd.birdId); if(!bird)return;
+    bird.stage=fd.stage;
+    bird.moltStartDate=fd.moltStartDate||'';
+    bird.moltStage=fd.moltStage||'Chưa theo dõi';
+    bird.moltCompleteDate=fd.moltCompleteDate||'';
+    bird.featherDryPercent=Math.max(0,Math.min(100,Number(fd.featherDryPercent||0)));
+    bird.fireCareStartDate=fd.fireCareStartDate||'';
+    bird.moltNotes=fd.moltNotes||'';
+    saveData();closeModal();render();showToast('Đã cập nhật chu kỳ lông và lửa.');
+    return;
+  }
+  if(e.target.id==='bird-form'){ if(!canAddBird()) return showToast(`Đã đạt giới hạn ${getBirdLimit()} chim của gói ${getEffectivePlan().toUpperCase()}.`); data.birds.push({id:uid(),...fd,featherDryPercent:Math.max(0,Math.min(100,Number(fd.featherDryPercent||0))),createdAt:new Date().toISOString()}); saveData(); closeModal(); setView('birds'); showToast('Đã thêm hồ sơ chim.'); }
   if(e.target.id==='task-form'){ data.tasks.push({id:uid(),...fd,done:false}); saveData(); closeModal(); render(); showToast('Đã tạo lịch chăm.'); }
   if(e.target.id==='performance-form'){
     const scores=[...Array(10)].map((_,i)=>Number(fd['s'+i])); const weights=[.05,.15,.15,.10,.10,.15,.15,.10,.05,.10]; const total=scores.reduce((sum,v,i)=>sum+v*weights[i],0);
