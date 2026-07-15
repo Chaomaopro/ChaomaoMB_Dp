@@ -157,3 +157,25 @@ canvas { width: 100%; height: 100%; }
   .auth-brand { text-align: left; margin: 0; }
   .auth-card { margin: 0; }
 }
+
+/* ===== Quản trị hệ thống & cập nhật v2.1 ===== */
+.admin-kpi-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.admin-action-grid { display:grid; grid-template-columns:1fr; gap:10px; }
+.admin-search-bar { display:grid; grid-template-columns:1fr; gap:9px; }
+.admin-search-bar input,
+.admin-search-bar select { width:100%; border:1px solid #d9c9c0; border-radius:12px; padding:11px 12px; background:#fff; color:var(--text); }
+.admin-user-item { align-items:flex-start; }
+.admin-user-item .avatar { margin-top:2px; }
+.admin-user-item p { line-height:1.55; }
+.update-banner { position:fixed; z-index:450; left:50%; top:max(12px,env(safe-area-inset-top)); transform:translateX(-50%); width:min(720px,calc(100% - 24px)); background:#fff; border:1px solid #e7c867; border-radius:18px; padding:13px; box-shadow:0 16px 45px rgba(63,42,30,.2); display:grid; gap:10px; }
+.update-banner strong { color:var(--primary); }
+.update-banner p { margin:3px 0 0; color:var(--muted); font-size:13px; }
+.update-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.update-actions .secondary-btn,.update-actions .fab-action { padding:10px 12px; }
+@media (min-width:640px){
+  .admin-kpi-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .admin-action-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .admin-search-bar { grid-template-columns:minmax(220px,1fr) 150px 130px 90px; align-items:end; }
+  .update-banner { grid-template-columns:1fr auto; align-items:center; }
+  .update-actions { min-width:220px; }
+}

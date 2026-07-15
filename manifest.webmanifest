@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Chào Mào Chiến Suốt Pro",
   "short_name": "Chào Mào Pro",
-  "description": "Ứng dụng cloud đa người dùng quản lý hồ sơ, dinh dưỡng, huấn luyện, sức khỏe và thi đấu chim Chào Mào.",
+  "description": "Chào Mào Chiến Suốt Pro v2.1 - PWA cloud đa người dùng với quản trị hệ thống.",
   "lang": "vi",
   "start_url": "./",
   "scope": "./",

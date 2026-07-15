@@ -1,5 +1,8 @@
+const APP_VERSION = '2.1.0';
+const PLAN_LIMITS = { free: 3, pro: 30, owner: 500 };
+
 const DEFAULT_DATA = {
-  profile: { owner: 'Nghệ nhân', phone: '', version: '2.0.0', notificationsEnabled: false, notifiedTaskKeys: [] },
+  profile: { owner: 'Nghệ nhân', phone: '', version: APP_VERSION, notificationsEnabled: false, notifiedTaskKeys: [] },
   birds: [],
   tasks: [],
   performances: [],
@@ -19,6 +22,9 @@ let deferredInstallPrompt = null;
 let timerState = { seconds: 0, running: false, interval: null, heatMinutes: 5 };
 let counters = { sanCau:0, che:0, bungCanh:0, raBong:0, loi:0 };
 let syncState = { state: 'connecting', message: 'Đang kết nối…' };
+let serviceWorkerRegistration = null;
+let refreshingForUpdate = false;
+let adminUsersCache = [];
 
 const $ = s => document.querySelector(s);
 const appContent = $('#app-content');
@@ -33,6 +39,9 @@ const appShell = $('#app-shell');
 const loadingScreen = $('#loading-screen');
 const authMessage = $('#auth-message');
 const syncIndicator = $('#sync-indicator');
+const updateBanner = $('#update-banner');
+const updateBannerText = $('#update-banner-text');
+const updateNowBtn = $('#update-now-btn');
 
 function saveData(){
   window.CMCSCloud?.save(data);
@@ -47,6 +56,12 @@ function showToast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.rem
 function openModal(title, html){ modalTitle.textContent=title; modalBody.innerHTML=html; modalBackdrop.classList.remove('hidden'); }
 function closeModal(){ modalBackdrop.classList.add('hidden'); modalBody.innerHTML=''; }
 function avg(values){ const valid=values.filter(v=>Number.isFinite(v)); return valid.length ? valid.reduce((a,b)=>a+b,0)/valid.length : 0; }
+function formatBytes(bytes=0){ const n=Number(bytes)||0; if(n<1024)return `${n} B`; if(n<1024**2)return `${(n/1024).toFixed(1)} KB`; return `${(n/1024**2).toFixed(1)} MB`; }
+function getEffectivePlan(profile=currentProfile){ if(!profile)return 'free'; if(profile.plan==='owner')return 'owner'; if(profile.plan_expires_at && new Date(profile.plan_expires_at).getTime()<Date.now())return 'free'; return profile.plan||'free'; }
+function getBirdLimit(){ return PLAN_LIMITS[getEffectivePlan()] || PLAN_LIMITS.free; }
+function canAddBird(){ return data.birds.length < getBirdLimit(); }
+function versionParts(value){ return String(value||'0').split('.').map(x=>Number.parseInt(x,10)||0); }
+function isNewerVersion(latest,current=APP_VERSION){ const a=versionParts(latest),b=versionParts(current); for(let i=0;i<Math.max(a.length,b.length);i++){ if((a[i]||0)>(b[i]||0))return true; if((a[i]||0)<(b[i]||0))return false; } return false; }
 function birdName(id){ return data.birds.find(b=>b.id===id)?.name || 'Chim chưa xác định'; }
 function getBirdScore(id){
   const rows=data.performances.filter(x=>x.birdId===id).sort((a,b)=>b.date.localeCompare(a.date));
@@ -98,12 +113,13 @@ function showApp(payload){
   data = payload.data || structuredClone(DEFAULT_DATA);
   data.profile ||= structuredClone(DEFAULT_DATA.profile);
   data.profile.owner = currentProfile.full_name || data.profile.owner || 'Nghệ nhân';
-  data.profile.version = '2.0.0';
+  data.profile.version = APP_VERSION;
   authScreen.classList.add('hidden');
   appShell.classList.remove('hidden');
   setLoading(false);
   updateSyncIndicator();
   setView(currentView);
+  checkForAppUpdate(true).catch(console.warn);
 }
 
 function handleCloudAuthEvent(event){
@@ -162,18 +178,73 @@ function accountHtml(){
   <div class="button-row section"><button class="secondary-btn" data-action="force-sync">Đồng bộ ngay</button><button class="danger-btn" data-action="logout">Đăng xuất</button></div>`;
 }
 
-async function openAdminUsers(){
+async function openAdminDashboard(){
+  openModal('Trung tâm quản trị', '<div class="empty">Đang tổng hợp dữ liệu hệ thống…</div>');
+  try{
+    const stats=await window.CMCSCloud.getAdminDashboard();
+    modalBody.innerHTML=`
+      <div class="admin-kpi-grid">
+        <div class="card kpi-card"><small>Tổng tài khoản</small><strong>${Number(stats.total_users||0)}</strong></div>
+        <div class="card kpi-card"><small>Hoạt động 7 ngày</small><strong>${Number(stats.active_7d||0)}</strong></div>
+        <div class="card kpi-card"><small>Người dùng mới 7 ngày</small><strong>${Number(stats.new_users_7d||0)}</strong></div>
+        <div class="card kpi-card"><small>Tổng hồ sơ chim</small><strong>${Number(stats.total_birds||0)}</strong></div>
+        <div class="card kpi-card"><small>Sắp hết hạn 7 ngày</small><strong>${Number(stats.expiring_7d||0)}</strong></div>
+        <div class="card kpi-card"><small>Tài khoản bị khóa</small><strong>${Number(stats.locked_users||0)}</strong></div>
+      </div>
+      <section class="section"><div class="card">
+        <div class="data-row"><span>Gói Free</span><strong>${Number(stats.free_users||0)}</strong></div>
+        <div class="data-row"><span>Gói Pro</span><strong>${Number(stats.pro_users||0)}</strong></div>
+        <div class="data-row"><span>Gói Owner</span><strong>${Number(stats.owner_users||0)}</strong></div>
+        <div class="data-row"><span>Dung lượng dữ liệu JSON</span><strong>${formatBytes(stats.total_data_bytes)}</strong></div>
+      </div></section>
+      <section class="section admin-action-grid">
+        <button class="card admin-entry" data-action="admin-create-user"><span class="badge success">＋ Tài khoản</span><h3>Tạo tài khoản mới</h3><p>Đặt mật khẩu tạm và cấp gói ngay trong ứng dụng.</p></button>
+        <button class="card admin-entry" data-action="admin-users"><span class="badge warning">👥 Người dùng</span><h3>Quản lý tài khoản</h3><p>Tìm kiếm, khóa/mở, cấp gói và quyền quản trị.</p></button>
+        <button class="card admin-entry" data-action="admin-audit"><span class="badge">🧾 Nhật ký</span><h3>Nhật ký quản trị</h3><p>Xem ai đã tạo hoặc thay đổi tài khoản.</p></button>
+        <button class="card admin-entry" data-action="admin-dashboard"><span class="badge">↻ Làm mới</span><h3>Cập nhật thống kê</h3><p>Tải lại số liệu mới nhất từ Supabase.</p></button>
+      </section>`;
+  }catch(error){
+    modalBody.innerHTML=`<div class="empty">${esc(error.message)}<br><small>Hãy chạy file migration v2.1 trong Supabase trước.</small></div>`;
+  }
+}
+
+function adminCreateUserForm(){
+  return `<form id="admin-create-user-form" class="form-grid">
+    <div class="notice">Tài khoản được tạo qua Supabase Edge Function. Mật khẩu tạm không được lưu trong ứng dụng.</div>
+    <div class="field"><label>Họ tên/biệt danh *</label><input name="fullName" required maxlength="120" placeholder="Ví dụ: Nguyễn Văn A"></div>
+    <div class="field"><label>Email đăng nhập *</label><input type="email" name="email" required autocomplete="off"></div>
+    <div class="field"><label>Số điện thoại</label><input name="phone" maxlength="30" inputmode="tel"></div>
+    <div class="field"><label>Mật khẩu tạm *</label><input type="password" name="password" required minlength="8" autocomplete="new-password"><small class="form-help">Ít nhất 8 ký tự. Nên yêu cầu người dùng đổi mật khẩu sau lần đăng nhập đầu.</small></div>
+    <div class="form-row">
+      <div class="field"><label>Gói sử dụng</label><select name="plan"><option value="free">Free · 3 chim</option><option value="pro">Pro · 30 chim</option><option value="owner">Owner · 500 chim</option></select></div>
+      <div class="field"><label>Vai trò</label><select name="role"><option value="user">Người dùng</option><option value="admin">Quản trị viên</option></select></div>
+    </div>
+    <div class="field"><label>Ngày hết hạn (để trống = không giới hạn)</label><input type="date" name="planExpiresAt"></div>
+    <button class="fab-action" type="submit">Tạo tài khoản</button>
+  </form>`;
+}
+
+async function openAdminUsers(filters={}){
   openModal('Quản trị người dùng', '<div class="empty">Đang tải danh sách tài khoản…</div>');
   try{
-    const users=await window.CMCSCloud.listUsers();
+    const users=await window.CMCSCloud.listUsers(filters);
+    adminUsersCache=users;
     const active=users.filter(u=>u.status==='active').length;
     const pro=users.filter(u=>['pro','owner'].includes(u.plan)).length;
-    modalBody.innerHTML=`<div class="grid-3-desktop">
-      <div class="card kpi-card"><small>Tổng tài khoản</small><strong>${users.length}</strong></div>
-      <div class="card kpi-card"><small>Đang hoạt động</small><strong>${active}</strong></div>
-      <div class="card kpi-card"><small>Pro/Owner</small><strong>${pro}</strong></div>
-    </div>
-    <section class="section"><div class="list">${users.map(adminUserCard).join('') || '<div class="empty">Chưa có tài khoản.</div>'}</div></section>`;
+    modalBody.innerHTML=`
+      <form id="admin-user-search-form" class="admin-search-bar">
+        <input name="search" value="${esc(filters.search||'')}" placeholder="Tìm tên, email, số điện thoại…">
+        <select name="status"><option value="">Mọi trạng thái</option><option value="active" ${filters.status==='active'?'selected':''}>Hoạt động</option><option value="locked" ${filters.status==='locked'?'selected':''}>Đã khóa</option><option value="inactive" ${filters.status==='inactive'?'selected':''}>Ngừng hoạt động</option></select>
+        <select name="plan"><option value="">Mọi gói</option><option value="free" ${filters.plan==='free'?'selected':''}>Free</option><option value="pro" ${filters.plan==='pro'?'selected':''}>Pro</option><option value="owner" ${filters.plan==='owner'?'selected':''}>Owner</option></select>
+        <button class="secondary-btn" type="submit">Tìm</button>
+      </form>
+      <div class="grid-3-desktop section">
+        <div class="card kpi-card"><small>Kết quả</small><strong>${users.length}</strong></div>
+        <div class="card kpi-card"><small>Đang hoạt động</small><strong>${active}</strong></div>
+        <div class="card kpi-card"><small>Pro/Owner</small><strong>${pro}</strong></div>
+      </div>
+      <div class="button-row section"><button class="fab-action" data-action="admin-create-user">＋ Tạo tài khoản</button><button class="secondary-btn" data-action="admin-dashboard">Tổng quan</button></div>
+      <section class="section"><div class="list">${users.map(adminUserCard).join('') || '<div class="empty">Không tìm thấy tài khoản.</div>'}</div></section>`;
   }catch(error){
     modalBody.innerHTML=`<div class="empty">${esc(error.message)}</div>`;
   }
@@ -181,22 +252,41 @@ async function openAdminUsers(){
 
 function adminUserCard(user){
   const last=user.last_seen_at?new Date(user.last_seen_at).toLocaleString('vi-VN'):'Chưa đăng nhập';
-  return `<div class="list-item">
+  const expiry=user.plan_expires_at?new Date(user.plan_expires_at).toLocaleDateString('vi-VN'):'Không giới hạn';
+  return `<div class="list-item admin-user-item">
     <div class="avatar">${user.role==='admin'?'★':'👤'}</div>
-    <div class="grow"><h3>${esc(user.full_name||'Nghệ nhân')}</h3><p>${esc(user.email||'')} · ${esc(user.plan)} · ${esc(user.status)}<br>Hoạt động: ${esc(last)}</p></div>
-    <button class="secondary-btn admin-edit-btn" data-admin-edit="${user.id}" data-admin-email="${esc(user.email||'')}" data-admin-status="${esc(user.status)}" data-admin-plan="${esc(user.plan)}" data-admin-expires="${user.plan_expires_at?String(user.plan_expires_at).slice(0,10):''}">Sửa</button>
+    <div class="grow"><h3>${esc(user.full_name||'Nghệ nhân')}</h3><p>${esc(user.email||'')}${user.phone?` · ${esc(user.phone)}`:''}<br>${esc((user.plan||'free').toUpperCase())} · ${esc(user.status)} · ${Number(user.bird_count||0)} chim · ${formatBytes(user.data_bytes)}<br>Hết hạn: ${esc(expiry)} · Hoạt động: ${esc(last)}</p></div>
+    <button class="secondary-btn admin-edit-btn" data-admin-edit="${user.id}">Sửa</button>
   </div>`;
 }
 
-function adminEditForm(button){
+function adminEditForm(user){
   return `<form id="admin-user-form" class="form-grid">
-    <input type="hidden" name="userId" value="${esc(button.dataset.adminEdit)}">
-    <div class="card"><strong>${esc(button.dataset.adminEmail)}</strong></div>
-    <div class="field"><label>Trạng thái</label><select name="status"><option value="active" ${button.dataset.adminStatus==='active'?'selected':''}>Hoạt động</option><option value="locked" ${button.dataset.adminStatus==='locked'?'selected':''}>Khóa</option><option value="inactive" ${button.dataset.adminStatus==='inactive'?'selected':''}>Ngừng hoạt động</option></select></div>
-    <div class="field"><label>Gói sử dụng</label><select name="plan"><option value="free" ${button.dataset.adminPlan==='free'?'selected':''}>Free</option><option value="pro" ${button.dataset.adminPlan==='pro'?'selected':''}>Pro</option><option value="owner" ${button.dataset.adminPlan==='owner'?'selected':''}>Owner</option></select></div>
-    <div class="field"><label>Ngày hết hạn (để trống = không giới hạn)</label><input type="date" name="plan_expires_at" value="${esc(button.dataset.adminExpires||'')}"></div>
+    <input type="hidden" name="userId" value="${esc(user.id)}">
+    <div class="card"><strong>${esc(user.full_name||'Nghệ nhân')}</strong><p class="form-help">${esc(user.email||'')}${user.phone?` · ${esc(user.phone)}`:''}</p></div>
+    <div class="form-row">
+      <div class="field"><label>Trạng thái</label><select name="status"><option value="active" ${user.status==='active'?'selected':''}>Hoạt động</option><option value="locked" ${user.status==='locked'?'selected':''}>Khóa</option><option value="inactive" ${user.status==='inactive'?'selected':''}>Ngừng hoạt động</option></select></div>
+      <div class="field"><label>Vai trò</label><select name="role"><option value="user" ${user.role==='user'?'selected':''}>Người dùng</option><option value="admin" ${user.role==='admin'?'selected':''}>Quản trị viên</option></select></div>
+    </div>
+    <div class="field"><label>Gói sử dụng</label><select name="plan"><option value="free" ${user.plan==='free'?'selected':''}>Free · tối đa 3 chim</option><option value="pro" ${user.plan==='pro'?'selected':''}>Pro · tối đa 30 chim</option><option value="owner" ${user.plan==='owner'?'selected':''}>Owner · tối đa 500 chim</option></select></div>
+    <div class="field"><label>Ngày hết hạn (để trống = không giới hạn)</label><input type="date" name="plan_expires_at" value="${user.plan_expires_at?String(user.plan_expires_at).slice(0,10):''}"></div>
+    <div class="field"><label>Lý do thay đổi</label><textarea name="reason" placeholder="Ví dụ: Đã thanh toán gia hạn gói Pro"></textarea></div>
     <button class="fab-action" type="submit">Lưu thay đổi</button>
+    <button class="secondary-btn" type="button" data-admin-reset="${esc(user.email||'')}">Gửi email đặt lại mật khẩu</button>
   </form>`;
+}
+
+async function openAdminAuditLogs(){
+  openModal('Nhật ký quản trị', '<div class="empty">Đang tải nhật ký…</div>');
+  try{
+    const logs=await window.CMCSCloud.listAuditLogs(150);
+    modalBody.innerHTML=`<div class="list">${logs.map(log=>{
+      const when=new Date(log.created_at).toLocaleString('vi-VN');
+      const action=log.action==='create_user'?'Tạo tài khoản':log.action==='update_user'?'Cập nhật tài khoản':log.action;
+      const reason=log.details?.reason?` · Lý do: ${esc(log.details.reason)}`:'';
+      return `<div class="list-item"><div class="avatar">🧾</div><div class="grow"><h3>${esc(action)}</h3><p>${esc(log.admin_email||'Hệ thống')} → ${esc(log.target_email||'')}${reason}<br>${esc(when)}</p></div></div>`;
+    }).join('')||'<div class="empty">Chưa có thao tác quản trị.</div>'}</div>`;
+  }catch(error){ modalBody.innerHTML=`<div class="empty">${esc(error.message)}</div>`; }
 }
 
 function setView(view){
@@ -247,12 +337,12 @@ function renderDashboard(){
     </section>`;
 }
 function taskHtml(t){ return `<div class="list-item ${t.done?'task-done':''}"><button class="check-btn ${t.done?'done':''}" data-task-toggle="${t.id}">${t.done?'✓':''}</button><div class="grow"><h3>${esc(t.time)} · ${esc(t.title)}</h3><p>${esc(t.birdId?birdName(t.birdId):'Toàn giàn')} ${t.note?'· '+esc(t.note):''}</p></div><button class="icon-btn" data-task-delete="${t.id}" style="width:34px;height:34px">⋯</button></div>`; }
-function birdCardHtml(b){ const score=getBirdScore(b.id); return `<div class="list-item" data-bird-open="${b.id}"><div class="avatar">${b.photo?`<img src="${b.photo}" alt="">`:'🪶'}</div><div class="grow"><h3>${esc(b.name)}</h3><p>${esc(b.origin||'Chưa rõ vùng')} · ${esc(b.ageGroup||'Chưa rõ tuổi')}</p><div style="margin-top:6px">${statusBadge(b.stage)}</div></div><div class="score">${score?score.toFixed(1):'–'}</div></div>`; }
+function birdCardHtml(b){ const score=getBirdScore(b.id); return `<div class="list-item" data-bird-open="${b.id}"><div class="avatar">🪶</div><div class="grow"><h3>${esc(b.name)}</h3><p>${esc(b.origin||'Chưa rõ vùng')} · ${esc(b.ageGroup||'Chưa rõ tuổi')}</p><div style="margin-top:6px">${statusBadge(b.stage)}</div></div><div class="score">${score?score.toFixed(1):'–'}</div></div>`; }
 
 function renderBirds(){
   appContent.innerHTML=`
     <section class="section" style="margin-top:0">
-      <div class="section-heading"><h2>${data.birds.length} hồ sơ chim</h2><button class="text-btn" data-action="add-bird">＋ Thêm chim</button></div>
+      <div class="section-heading"><h2>${data.birds.length}/${getBirdLimit()} hồ sơ chim</h2><button class="text-btn" data-action="add-bird">＋ Thêm chim</button></div><p class="form-help">Gói ${esc(getEffectivePlan().toUpperCase())}: tối đa ${getBirdLimit()} hồ sơ chim.</p>
       <div class="filters"><button class="filter-chip active">Tất cả</button><button class="filter-chip">Đang lên lửa</button><button class="filter-chip">Sắp thi</button><button class="filter-chip">Điều trị</button></div>
     </section>
     <section class="section"><div class="list">${data.birds.length?data.birds.map(birdCardHtml).join(''):`<div class="empty"><span class="emoji">🪶</span>Chưa có hồ sơ chim.<br><button class="text-btn" data-action="add-bird">Tạo hồ sơ đầu tiên</button></div>`}</div></section>`;
@@ -301,12 +391,13 @@ function renderMore(){
       <div class="list-item" style="border:0;padding:0">
         <div class="avatar">👤</div>
         <div class="grow"><h3>${esc(currentProfile?.full_name||'Nghệ nhân')}</h3><p>${esc(currentUser?.email||'')}</p></div>
-        <span class="badge ${currentProfile?.plan==='free'?'':'success'}">${esc((currentProfile?.plan||'free').toUpperCase())}</span>
+        <span class="badge ${getEffectivePlan()==='free'?'':'success'}">${esc(getEffectivePlan().toUpperCase())}</span>
       </div>
       <div class="data-row"><span>Trạng thái cloud</span><strong><span class="badge ${syncBadge}">${esc(syncState.message||'')}</span></strong></div>
+      <div class="data-row"><span>Giới hạn hồ sơ chim</span><strong>${data.birds.length}/${getBirdLimit()}</strong></div>
       <div class="button-row"><button class="secondary-btn" data-action="account">Tài khoản</button><button class="secondary-btn" data-action="force-sync">Đồng bộ ngay</button></div>
     </section>
-    ${isAdmin?`<section class="section"><button class="card admin-entry" data-action="admin-users"><span class="badge warning">★ Chủ hệ thống</span><h3>Quản trị người dùng</h3><p>Xem tài khoản, khóa/mở và cấp gói sử dụng.</p></button></section>`:''}
+    ${isAdmin?`<section class="section"><button class="card admin-entry" data-action="admin-dashboard"><span class="badge warning">★ Chủ hệ thống</span><h3>Trung tâm quản trị</h3><p>Dashboard, tạo tài khoản, quản lý gói và nhật ký thao tác.</p></button></section>`:''}
     <section class="grid-2 section">
       <button class="card" data-action="add-health" style="text-align:left"><span class="badge danger">🩺</span><h3 style="margin:10px 0 4px">Sổ tay y tế</h3><p style="font-size:13px;color:var(--muted)">${data.healthLogs.length} bản ghi</p></button>
       <button class="card" data-action="add-performance" style="text-align:left"><span class="badge success">📊</span><h3 style="margin:10px 0 4px">Phong độ</h3><p style="font-size:13px;color:var(--muted)">${data.performances.length} lần chấm</p></button>
@@ -314,8 +405,8 @@ function renderMore(){
       <button class="card" data-action="add-training" style="text-align:left"><span class="badge warning">🏃</span><h3 style="margin:10px 0 4px">Tập luyện</h3><p style="font-size:13px;color:var(--muted)">${data.trainingLogs.length} buổi tập</p></button>
     </section>
     <section class="section"><div class="section-heading"><h2>Sức khỏe gần đây</h2></div><div class="list">${latestHealth.length?latestHealth.map(h=>`<div class="list-item"><div class="avatar">🩺</div><div class="grow"><h3>${esc(birdName(h.birdId))}</h3><p>${formatDate(h.date)} · ${esc(h.symptom)} · Cấp ${esc(h.level)}</p></div></div>`).join(''):`<div class="empty">Chưa có nhật ký sức khỏe.</div>`}</div></section>
-    <section class="section"><div class="card"><h3>Dữ liệu và cài đặt</h3><div class="button-row"><button class="secondary-btn" data-action="export-data">Xuất sao lưu</button><button class="secondary-btn" data-action="import-data">Nhập dữ liệu</button></div><div style="height:10px"></div><button class="secondary-btn" data-action="enable-notifications">${data.profile.notificationsEnabled?'Đã bật nhắc việc':'Bật nhắc việc trên máy'}</button><div style="height:10px"></div><button class="danger-btn" data-action="reset-data">Xóa dữ liệu của tài khoản</button><p style="font-size:12px;color:var(--muted);margin:12px 0 0">Dữ liệu được lưu trên thiết bị và tự đồng bộ lên Supabase khi có mạng.</p></div></section>
-    <section class="section"><div class="card"><div class="data-row"><span>Phiên bản</span><strong>${esc(data.profile.version)}</strong></div><div class="data-row"><span>Chế độ</span><strong>PWA Cloud đa người dùng</strong></div><div class="data-row"><span>Tác giả</span><strong>Minh Đức</strong></div></div></section>`;
+    <section class="section"><div class="card"><h3>Dữ liệu và cài đặt</h3><div class="button-row"><button class="secondary-btn" data-action="export-data">Xuất sao lưu</button><button class="secondary-btn" data-action="import-data">Nhập dữ liệu</button></div><div style="height:10px"></div><button class="secondary-btn" data-action="enable-notifications">${data.profile.notificationsEnabled?'Đã bật nhắc việc':'Bật nhắc việc trên máy'}</button><div style="height:10px"></div><button class="secondary-btn" data-action="check-update">Kiểm tra cập nhật ứng dụng</button><div style="height:10px"></div><button class="danger-btn" data-action="reset-data">Xóa dữ liệu của tài khoản</button><p style="font-size:12px;color:var(--muted);margin:12px 0 0">Dữ liệu được lưu trên thiết bị và tự đồng bộ lên Supabase khi có mạng. Bản v2.1 không sử dụng Supabase Storage và không lưu ảnh người dùng.</p></div></section>
+    <section class="section"><div class="card"><div class="data-row"><span>Phiên bản</span><strong>${esc(APP_VERSION)}</strong></div><div class="data-row"><span>Chế độ</span><strong>PWA Cloud đa người dùng</strong></div><div class="data-row"><span>Lưu ảnh cloud</span><strong>Đã tắt</strong></div><div class="data-row"><span>Tác giả</span><strong>Minh Đức</strong></div></div></section>`;
 }
 
 function birdForm(){ return `<form id="bird-form" class="form-grid"><div class="field"><label>Tên chim *</label><input name="name" required placeholder="Ví dụ: Chiến Tướng"></div><div class="form-row"><div class="field"><label>Vùng miền</label><select name="origin"><option>Huế</option><option>Trung Mang</option><option>Bình Điền</option><option>Quảng Nam</option><option>Quảng Ngãi</option><option>Tây Nguyên</option><option>Không xác định</option></select></div><div class="field"><label>Lứa tuổi</label><select name="ageGroup"><option>Chim tơ</option><option>Tơ một mùa</option><option>Hai mùa</option><option>Ba mùa trở lên</option><option>Chim già rừng</option></select></div></div><div class="field"><label>Giai đoạn hiện tại</label><select name="stage"><option>Dưỡng ổn định</option><option>Thay lông</option><option>Khô lông</option><option>Lên lửa</option><option>Đạt điểm rơi</option><option>Sau thi</option><option>Điều trị</option><option>Cách ly</option></select></div><div class="field"><label>Lối chơi nổi bật</label><input name="style" placeholder="Sàn cầu nhanh, bung cánh, ra bọng đều..."></div><div class="field"><label>Thành tích</label><textarea name="achievements" placeholder="Top 10, cờ, cúp..."></textarea></div><button class="fab-action" type="submit">Lưu hồ sơ chim</button></form>`; }
@@ -346,7 +437,7 @@ function drawPerformanceChart(rows){
 }
 
 function handleAction(action){
-  if(action==='add-bird') openModal('Thêm hồ sơ chim',birdForm());
+  if(action==='add-bird'){ if(!canAddBird()) return openModal('Đã đạt giới hạn gói',`<div class="notice">Gói <strong>${esc(getEffectivePlan().toUpperCase())}</strong> chỉ cho phép tối đa <strong>${getBirdLimit()}</strong> hồ sơ chim. Hãy xóa hồ sơ không dùng hoặc liên hệ quản trị viên để nâng gói.</div>`); openModal('Thêm hồ sơ chim',birdForm()); }
   if(action==='add-task') openModal('Thêm lịch chăm',taskForm());
   if(action==='add-performance') { if(!data.birds.length) return showToast('Hãy thêm hồ sơ chim trước.'); openModal('Chấm phong độ tuần',performanceForm()); }
   if(action==='add-health') { if(!data.birds.length) return showToast('Hãy thêm hồ sơ chim trước.'); openModal('Nhật ký sức khỏe',healthForm()); }
@@ -359,7 +450,11 @@ function handleAction(action){
   if(action==='reset-data') resetData();
   if(action==='enable-notifications') enableNotifications();
   if(action==='account') openModal('Tài khoản cloud',accountHtml());
+  if(action==='admin-dashboard') openAdminDashboard();
   if(action==='admin-users') openAdminUsers();
+  if(action==='admin-create-user') openModal('Tạo tài khoản mới',adminCreateUserForm());
+  if(action==='admin-audit') openAdminAuditLogs();
+  if(action==='check-update') checkForAppUpdate(false);
   if(action==='logout') window.CMCSCloud.signOut().catch(error=>showToast(error.message));
   if(action==='force-sync'){
     window.CMCSCloud.forceSync(data)
@@ -423,10 +518,23 @@ modalBody.addEventListener('input',e=>{ if(e.target.matches('[data-score-label]'
 modalBody.addEventListener('click',e=>{
   const del=e.target.closest('[data-delete-bird]'); if(del&&confirm('Xóa hồ sơ chim và dữ liệu liên quan?')){ const id=del.dataset.deleteBird; data.birds=data.birds.filter(x=>x.id!==id); data.performances=data.performances.filter(x=>x.birdId!==id);data.healthLogs=data.healthLogs.filter(x=>x.birdId!==id);saveData();closeModal();render(); }
   const perf=e.target.closest('[data-add-performance-bird]'); if(perf){ openModal('Chấm phong độ tuần',performanceForm().replace(`value="${perf.dataset.addPerformanceBird}"`,`value="${perf.dataset.addPerformanceBird}" selected`)); }
-  const adminEdit=e.target.closest('[data-admin-edit]'); if(adminEdit){ openModal('Cập nhật tài khoản',adminEditForm(adminEdit)); }
+  const adminEdit=e.target.closest('[data-admin-edit]'); if(adminEdit){ const user=adminUsersCache.find(x=>x.id===adminEdit.dataset.adminEdit); if(user)openModal('Cập nhật tài khoản',adminEditForm(user)); }
+  const adminReset=e.target.closest('[data-admin-reset]'); if(adminReset&&confirm(`Gửi email đặt lại mật khẩu tới ${adminReset.dataset.adminReset}?`)){ window.CMCSCloud.sendPasswordReset(adminReset.dataset.adminReset).then(()=>showToast('Đã gửi email đặt lại mật khẩu.')).catch(error=>showToast(error.message)); }
 });
 modalBody.addEventListener('submit',async e=>{
   e.preventDefault(); const fd=Object.fromEntries(new FormData(e.target).entries());
+  if(e.target.id==='admin-user-search-form'){
+    await openAdminUsers({search:fd.search,status:fd.status,plan:fd.plan});
+    return;
+  }
+  if(e.target.id==='admin-create-user-form'){
+    try{
+      const created=await window.CMCSCloud.createAdminUser(fd);
+      showToast(`Đã tạo tài khoản ${created.email||fd.email}.`);
+      await openAdminUsers({search:fd.email});
+    }catch(error){ showToast(error.message); }
+    return;
+  }
   if(e.target.id==='profile-form'){
     try{
       currentProfile=await window.CMCSCloud.updateMyProfile(fd.fullName);
@@ -438,13 +546,13 @@ modalBody.addEventListener('submit',async e=>{
   if(e.target.id==='admin-user-form'){
     if(fd.userId===currentUser?.id && fd.status!=='active') return showToast('Không thể tự khóa tài khoản quản trị đang dùng.');
     try{
-      await window.CMCSCloud.updateUser(fd.userId,{status:fd.status,plan:fd.plan,plan_expires_at:fd.plan_expires_at});
+      await window.CMCSCloud.updateUser(fd.userId,{status:fd.status,plan:fd.plan,role:fd.role,plan_expires_at:fd.plan_expires_at,reason:fd.reason});
       showToast('Đã cập nhật tài khoản.');
       await openAdminUsers();
     }catch(error){ showToast(error.message); }
     return;
   }
-  if(e.target.id==='bird-form'){ data.birds.push({id:uid(),...fd,createdAt:new Date().toISOString()}); saveData(); closeModal(); setView('birds'); showToast('Đã thêm hồ sơ chim.'); }
+  if(e.target.id==='bird-form'){ if(!canAddBird()) return showToast(`Đã đạt giới hạn ${getBirdLimit()} chim của gói ${getEffectivePlan().toUpperCase()}.`); data.birds.push({id:uid(),...fd,createdAt:new Date().toISOString()}); saveData(); closeModal(); setView('birds'); showToast('Đã thêm hồ sơ chim.'); }
   if(e.target.id==='task-form'){ data.tasks.push({id:uid(),...fd,done:false}); saveData(); closeModal(); render(); showToast('Đã tạo lịch chăm.'); }
   if(e.target.id==='performance-form'){
     const scores=[...Array(10)].map((_,i)=>Number(fd['s'+i])); const weights=[.05,.15,.15,.10,.10,.15,.15,.10,.05,.10]; const total=scores.reduce((sum,v,i)=>sum+v*weights[i],0);
@@ -517,7 +625,55 @@ window.addEventListener('visibilitychange',async()=>{
     }catch(error){ console.warn(error); }
   }
 });
-if('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.error));
+setupServiceWorker();
+
+
+function showUpdateBanner(message='Đã có phiên bản ứng dụng mới.'){
+  if(!updateBanner)return;
+  updateBannerText.textContent=message;
+  updateBanner.classList.remove('hidden');
+}
+function hideUpdateBanner(){ updateBanner?.classList.add('hidden'); }
+async function checkForAppUpdate(silent=false){
+  try{
+    const latest=await window.CMCSCloud.getLatestRelease();
+    if(latest&&isNewerVersion(latest.version,APP_VERSION)){
+      showUpdateBanner(`${latest.title} · Phiên bản ${latest.version}`);
+    }
+    if(serviceWorkerRegistration){
+      await serviceWorkerRegistration.update();
+      if(serviceWorkerRegistration.waiting) showUpdateBanner('Bản cập nhật đã sẵn sàng để cài.');
+    }
+    if(!silent&&!latest?.version) showToast('Không đọc được thông tin phiên bản từ Supabase.');
+    else if(!silent&&!isNewerVersion(latest?.version,APP_VERSION)&&!serviceWorkerRegistration?.waiting) showToast(`Anh đang dùng phiên bản mới nhất ${APP_VERSION}.`);
+  }catch(error){ if(!silent)showToast(error.message); }
+}
+function installWaitingServiceWorker(){
+  if(serviceWorkerRegistration?.waiting) serviceWorkerRegistration.waiting.postMessage({type:'SKIP_WAITING'});
+  else location.reload();
+}
+function setupServiceWorker(){
+  if(!('serviceWorker' in navigator))return;
+  window.addEventListener('load',async()=>{
+    try{
+      serviceWorkerRegistration=await navigator.serviceWorker.register('./sw.js');
+      if(serviceWorkerRegistration.waiting) showUpdateBanner('Bản cập nhật đã sẵn sàng để cài.');
+      serviceWorkerRegistration.addEventListener('updatefound',()=>{
+        const worker=serviceWorkerRegistration.installing;
+        worker?.addEventListener('statechange',()=>{
+          if(worker.state==='installed'&&navigator.serviceWorker.controller) showUpdateBanner('Đã tải xong phiên bản mới.');
+        });
+      });
+    }catch(error){ console.warn('Không đăng ký được Service Worker:',error); }
+  });
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if(refreshingForUpdate)return;
+    refreshingForUpdate=true;
+    location.reload();
+  });
+}
+updateNowBtn?.addEventListener('click',installWaitingServiceWorker);
+$('#update-later-btn')?.addEventListener('click',hideUpdateBanner);
 
 setInterval(checkDueTasks, 30000);
 checkDueTasks();
