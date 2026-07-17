@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cmcs-pro-v2.4.0-maintain-fire';
+const CACHE_NAME = 'cmcs-pro-v2.5.0-weekly-coach';
 const APP_SHELL = [
   './',
   './index.html',
